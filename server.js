@@ -1,46 +1,62 @@
 // server.js
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const Razorpay = require('razorpay');
+require("dotenv").config();
+const express = require("express");
+const cors = require("cors");
+const Razorpay = require("razorpay");
+const fetch = (...args) =>
+  import("node-fetch").then(({ default: fetch }) => fetch(...args));
 
 const app = express();
 app.use(express.json());
 app.use(cors());
 
-// ✅ 1. Initialize Razorpay client once (global scope)
+// -----------------------------
+// 1. Initialize Razorpay
+// -----------------------------
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// ✅ 2. Warm-up function: keeps Render instance awake (optional)
-if (process.env.NODE_ENV === 'production') {
-  setInterval(() => {
-    fetch('https://razorpay-cy4m.onrender.com/health').catch(() => {});
-  }, 300000); // every 5 min
+// -----------------------------
+// 2. KEEP SERVER AWAKE (Render Fix)
+// -----------------------------
+const SELF_URL = "https://razorpay-cn9l.onrender.com";
+
+function keepAlive() {
+  fetch(`${SELF_URL}/health`).catch(() => {});
 }
 
-// ✅ Health route for Render warm-up
-app.get('/health', (_, res) => res.status(200).send('OK'));
+// Ping every **4 minutes** (Render sleeps at 5 minutes)
+setInterval(keepAlive, 240000);
 
-// ✅ 3. Fast Razorpay order creation endpoint
-app.post('/create-order', async (req, res) => {
+// Ping immediately on start
+keepAlive();
+
+// -----------------------------
+// 3. Health route
+// -----------------------------
+app.get("/health", (req, res) => res.status(200).send("OK"));
+
+// -----------------------------
+// 4. FAST Razorpay Order Endpoint
+// -----------------------------
+app.post("/create-order", async (req, res) => {
   try {
-    const { amount, currency = 'INR', receipt } = req.body;
+    const { amount, currency = "INR", receipt } = req.body;
 
     if (!amount || isNaN(amount)) {
-      return res.status(400).json({ success: false, error: 'Invalid amount' });
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid amount" });
     }
 
-    // Keep object minimal for speed
     const options = {
-      amount: Math.round(amount * 100), // paise
+      amount: Math.round(amount * 100),
       currency,
-      receipt: receipt || `receipt_${Date.now()}`,
+      receipt: receipt || `rcpt_${Date.now()}`,
     };
 
-    // ⚡ Create order directly (Razorpay SDK handles validation)
     const order = await razorpay.orders.create(options);
 
     res.json({
@@ -51,14 +67,17 @@ app.post('/create-order', async (req, res) => {
       receipt: order.receipt,
     });
   } catch (err) {
-    console.error('❌ Error creating Razorpay order:', err);
-    res.status(500).json({ success: false, error: err.message || 'Server error' });
+    console.error("❌ Razorpay error:", err);
+    res
+      .status(500)
+      .json({ success: false, error: err.message || "Server error" });
   }
 });
 
-// ✅ 4. Start server
+// -----------------------------
+// 5. Start Server
+// -----------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`✅ Razorpay backend running on port ${PORT}`);
-});
- 
+app.listen(PORT, () =>
+  console.log(`🚀 Razorpay backend live on port ${PORT}`)
+);
