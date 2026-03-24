@@ -146,7 +146,9 @@ app.post("/create-order", async (req, res) => {
     res.status(500).json({ success: false, error: "Failed to create order" });
   }
 });
-
+app.get("/version", (req, res) => {
+  res.send("VERSION 2 UPDATED");
+});
 // ─────────────────────────────────────────────
 // EASEBUZZ — Initiate Payment Link
 // ─────────────────────────────────────────────
@@ -162,7 +164,7 @@ app.post("/api/payment", async (req, res) => {
     }
 
     const hash = generateHash(data);
-    const SERVER_URL = process.env.SERVER_URL || "https://events-easebuzz-x2kv.onrender.com";
+    const SERVER_URL = process.env.SERVER_URL || "https://raz.folkexclusive.com";
 
     const form = {
       key: easebuzz.key,
