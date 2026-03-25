@@ -220,8 +220,12 @@ app.post("/api/easebuzz/success", async (req, res) => {
       .firstPage();
 
     if (records.length > 0) {
-      await base(AIRTABLE_TABLE_NAME).update(records[0].id, { "Payment Status": "Success" });
-      console.log(`✅ Airtable — Success updated for txnid: ${txnid}`);
+      await Promise.all(
+        records.map((record) =>
+          base(AIRTABLE_TABLE_NAME).update(record.id, { "Payment Status": "Success" })
+        )
+      );
+      console.log(`✅ Airtable — Success updated for ${records.length} record(s) with txnid: ${txnid}`);
     } else {
       console.warn(`⚠️ No Airtable record for txnid: ${txnid}`);
     }
@@ -247,8 +251,12 @@ app.post("/api/easebuzz/failure", async (req, res) => {
       .firstPage();
 
     if (records.length > 0) {
-      await base(AIRTABLE_TABLE_NAME).update(records[0].id, { "Payment Status": "Failed" });
-      console.log(`❌ Airtable — Failed updated for txnid: ${txnid}`);
+      await Promise.all(
+        records.map((record) =>
+          base(AIRTABLE_TABLE_NAME).update(record.id, { "Payment Status": "Failed" })
+        )
+      );
+      console.log(`❌ Airtable — Failed updated for ${records.length} record(s) with txnid: ${txnid}`);
     } else {
       console.warn(`⚠️ No Airtable record for txnid: ${txnid}`);
     }
