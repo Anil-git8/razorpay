@@ -1,288 +1,141 @@
-global.startTime = Date.now();
+require("dotenv").config();
 
 const express = require("express");
-const bodyParser = require("body-parser");
 const cors = require("cors");
-const sha512 = require("js-sha512");
-const axios = require("axios");
-const qs = require("qs");
 const Razorpay = require("razorpay");
-const Airtable = require("airtable");
-require("dotenv").config();
+const crypto = require("crypto");
+
+global.startTime = Date.now();
 
 const app = express();
 
-// ─────────────────────────────────────────────
-// Middleware
-// ─────────────────────────────────────────────
 app.use(cors());
-app.use(express.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
+app.use(express.json({ limit: "10kb" }));
 
-// ─────────────────────────────────────────────
-// Validate Required ENV Variables on Startup
-// ─────────────────────────────────────────────
-const REQUIRED_ENV = [
-  "AIRTABLE_API_KEY",
-  "AIRTABLE_BASE_ID",
-  "AIRTABLE_TABLE_NAME",
-  "RAZORPAY_KEY_ID",
-  "RAZORPAY_KEY_SECRET",
-  "EASEBUZZ_KEY",
-  "EASEBUZZ_SALT",
-];
-
-const missingEnv = REQUIRED_ENV.filter((key) => !process.env[key]);
-if (missingEnv.length > 0) {
-  console.error("❌ Missing required environment variables:", missingEnv.join(", "));
-  process.exit(1);
-}
-
-// ─────────────────────────────────────────────
-// Razorpay Config
-// ─────────────────────────────────────────────
+// -----------------------------
+// 1. RAZORPAY (Pre-warmed instance)
+// -----------------------------
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// ─────────────────────────────────────────────
-// Easebuzz Config
-// ─────────────────────────────────────────────
-const easebuzz = {
-  key: process.env.EASEBUZZ_KEY,
-  salt: process.env.EASEBUZZ_SALT,
-  env: process.env.EASEBUZZ_ENV || "prod",
-};
+razorpay.orders.all({ count: 1 }).catch(() => { });
 
-// ─────────────────────────────────────────────
-// Airtable Config
-// ─────────────────────────────────────────────
-const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY;
-const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID;
-const AIRTABLE_TABLE_NAME = process.env.AIRTABLE_TABLE_NAME;
+// -----------------------------
+// 2. INVOICE ID GENERATOR
+// -----------------------------
+let invoiceCounter = 1;
 
-const base = new Airtable({ apiKey: AIRTABLE_API_KEY }).base(AIRTABLE_BASE_ID);
-
-// ─────────────────────────────────────────────
-// Easebuzz Helpers
-// ─────────────────────────────────────────────
-function getEasebuzzUrl(env) {
-  return env === "prod"
-    ? "https://pay.easebuzz.in/"
-    : "https://testpay.easebuzz.in/";
+function generateInvoiceId() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const count = String(invoiceCounter++).padStart(4, "0");
+  // Format: INV-20250402-0001
+  return `INV-${year}${month}${day}-${count}`;
 }
 
-function generateHash(data) {
-  const str =
-    easebuzz.key + "|" +
-    data.txnid + "|" +
-    data.amount + "|" +
-    data.productinfo + "|" +
-    data.name + "|" +
-    data.email + "|" +
-    (data.udf1 || "") + "|" +
-    (data.udf2 || "") + "|" +
-    (data.udf3 || "") + "|" +
-    (data.udf4 || "") + "|" +
-    (data.udf5 || "") + "|" +
-    (data.udf6 || "") + "|" +
-    (data.udf7 || "") + "|" +
-    (data.udf8 || "") + "|" +
-    (data.udf9 || "") + "|" +
-    (data.udf10 || "") + "|" +
-    easebuzz.salt;
+// -----------------------------
+// 3. ROUTES
+// -----------------------------
 
-  return sha512.sha512(str);
-}
-
-// ─────────────────────────────────────────────
-// General Routes
-// ─────────────────────────────────────────────
-app.get("/", (req, res) => {
-  res.json({
-    message: "FOLK Payments API Server",
-    status: "running",
-    uptime: `${Math.floor(process.uptime())}s`,
-    endpoints: {
-      razorpay: ["POST /create-order"],
-      easebuzz: [
-        "POST /api/payment",
-        "POST /api/easebuzz/success",
-        "POST /api/easebuzz/failure",
-      ],
-      utils: ["GET /health", "GET /ping"],
-    },
-  });
+app.get("/health", (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.status(200).json({ ok: true, t: Date.now() });
 });
 
-app.get("/ping", (req, res) => res.json({ status: "alive", time: new Date().toISOString() }));
-app.get("/health", (req, res) => res.json({ ok: true, uptime: process.uptime(), time: Date.now() }));
+app.get("/warmup", (req, res) => res.json({ ready: true }));
 
-// ─────────────────────────────────────────────
-// RAZORPAY — Create Order
-// ─────────────────────────────────────────────
+// ── Create Order ─────────────────────────────────────────────────
 app.post("/create-order", async (req, res) => {
   const start = Date.now();
   try {
-    const { amount, currency = "INR" } = req.body;
+    const { amount, currency = "INR", name, email, phone } = req.body;
 
-    if (!amount || isNaN(amount) || amount < 1) {
-      return res.status(400).json({ success: false, error: "Invalid amount" });
+    if (!amount || amount < 1) {
+      return res.status(400).json({ error: "Invalid amount" });
     }
+
+    const invoiceId = generateInvoiceId();
 
     const order = await razorpay.orders.create({
-      amount: Math.round(Number(amount) * 100),
+      amount: Math.round(amount * 100), // paise
       currency: currency.toUpperCase(),
-      receipt: `receipt_${Date.now()}`,
+      receipt: invoiceId,               // invoice ID used as receipt
+      notes: {
+        invoice_id: invoiceId,
+        customer_name: name || "",
+        customer_email: email || "",
+        customer_phone: phone || "",
+      },
     });
 
-    console.log(`✅ Razorpay order created in ${Date.now() - start}ms — ID: ${order.id}`);
-    res.json({ success: true, orderId: order.id, amount: order.amount, currency: order.currency });
-
+    console.log(`✅ Order created [${invoiceId}]: ${Date.now() - start}ms`);
+    res.json({
+      success: true,
+      orderId: order.id,
+      invoiceId: invoiceId,             // send back to frontend
+      amount: order.amount,
+      currency: order.currency,
+    });
   } catch (err) {
-    console.error("❌ Razorpay error:", err.message);
-    res.status(500).json({ success: false, error: "Failed to create order" });
+    console.error(`❌ Create order failed (${Date.now() - start}ms): ${err.message}`);
+    res.status(500).json({ success: false, error: "Order creation failed" });
   }
 });
-app.get("/version", (req, res) => {
-  res.send("VERSION 2 UPDATED");
-});
-// ─────────────────────────────────────────────
-// EASEBUZZ — Initiate Payment Link
-// ─────────────────────────────────────────────
-app.post("/api/payment", async (req, res) => {
+
+// ── Verify Payment ───────────────────────────────────────────────
+app.post("/verify-payment", (req, res) => {
   try {
-    const data = req.body;
-    data.name = data.name?.trim() || "";
-    data.email = data.email?.trim() || "";
-    data.productinfo = data.productinfo?.trim() || "";
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
 
-    if (!data.txnid || !data.amount || !data.email) {
-      return res.status(400).json({ status: 0, error: "txnid, amount and email are required" });
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing payment verification fields",
+      });
     }
 
-    const hash = generateHash(data);
-    const SERVER_URL = process.env.SERVER_URL || "https://raz.folkexclusive.com";
+    const body = `${razorpay_order_id}|${razorpay_payment_id}`;
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(body)
+      .digest("hex");
 
-    const form = {
-      key: easebuzz.key,
-      txnid: data.txnid,
-      amount: data.amount,
-      firstname: data.name,
-      email: data.email,
-      phone: data.phone,
-      productinfo: data.productinfo,
-      surl: `${SERVER_URL}/api/easebuzz/success`,
-      furl: `${SERVER_URL}/api/easebuzz/failure`,
-      hash,
-    };
-
-    const response = await axios.post(
-      getEasebuzzUrl(easebuzz.env) + "payment/initiateLink",
-      qs.stringify(form),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-    );
-
-    const result = response.data;
-
-    if (result?.status === 1 && typeof result.data === "string") {
-      const paymentUrl = getEasebuzzUrl(easebuzz.env) + "pay/" + result.data;
-      console.log(`✅ Easebuzz link generated — txnid: ${data.txnid}`);
-      return res.json({ status: 1, url: paymentUrl });
+    if (expectedSignature !== razorpay_signature) {
+      console.warn(`⚠️ Signature mismatch for order: ${razorpay_order_id}`);
+      return res.status(400).json({
+        success: false,
+        error: "Payment verification failed. Invalid signature.",
+      });
     }
 
-    if (result?.status === 1 && result?.data?.payment_link) {
-      return res.json({ status: 1, url: result.data.payment_link });
-    }
-
-    console.warn("⚠️ Easebuzz unexpected response:", result);
-    res.status(500).json({ status: 0, error: "Failed to generate payment link", details: result });
-
-  } catch (error) {
-    console.error("❌ Easebuzz error:", error?.response?.data || error.message);
-    res.status(500).json({ status: 0, error: "Internal Server Error" });
+    console.log(`✅ Payment verified: ${razorpay_payment_id}`);
+    res.json({
+      success: true,
+      paymentId: razorpay_payment_id,
+      orderId: razorpay_order_id,
+    });
+  } catch (err) {
+    console.error(`❌ Verify failed: ${err.message}`);
+    res.status(500).json({ success: false, error: "Verification error" });
   }
 });
 
-// ─────────────────────────────────────────────
-// EASEBUZZ — Payment Success Callback
-// ─────────────────────────────────────────────
-app.post("/api/easebuzz/success", async (req, res) => {
-  console.log("✅ Easebuzz Success Callback:", req.body);
-  const txnid = req.body.txnid;
-  if (!txnid) return res.status(400).send("Missing txnid");
-
-  try {
-    const records = await base(AIRTABLE_TABLE_NAME)
-      .select({ filterByFormula: `{txnid} = '${txnid}'` })
-      .firstPage();
-
-    if (records.length > 0) {
-      await Promise.all(
-        records.map((record) =>
-          base(AIRTABLE_TABLE_NAME).update(record.id, { "Payment Status": "Success" })
-        )
-      );
-      console.log(`✅ Airtable — Success updated for ${records.length} record(s) with txnid: ${txnid}`);
-    } else {
-      console.warn(`⚠️ No Airtable record for txnid: ${txnid}`);
-    }
-
-    return res.redirect("https://folkexclusive.com/event-success");
-  } catch (error) {
-    console.error("❌ Airtable error (success):", error);
-    res.status(500).send("Error updating Airtable record");
-  }
+// ── 404 fallback ─────────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ error: "Route not found" });
 });
 
-// ─────────────────────────────────────────────
-// EASEBUZZ — Payment Failure Callback
-// ─────────────────────────────────────────────
-app.post("/api/easebuzz/failure", async (req, res) => {
-  console.log("❌ Easebuzz Failure Callback:", req.body);
-  const txnid = req.body.txnid;
-  if (!txnid) return res.status(400).send("Missing txnid");
-
-  try {
-    const records = await base(AIRTABLE_TABLE_NAME)
-      .select({ filterByFormula: `{txnid} = '${txnid}'` })
-      .firstPage();
-
-    if (records.length > 0) {
-      await Promise.all(
-        records.map((record) =>
-          base(AIRTABLE_TABLE_NAME).update(record.id, { "Payment Status": "Failed" })
-        )
-      );
-      console.log(`❌ Airtable — Failed updated for ${records.length} record(s) with txnid: ${txnid}`);
-    } else {
-      console.warn(`⚠️ No Airtable record for txnid: ${txnid}`);
-    }
-
-    return res.redirect("https://folkexclusive.com/event-failed");
-  } catch (error) {
-    console.error("❌ Airtable error (failure):", error);
-    res.status(500).send("Error updating Airtable record");
-  }
-});
-
-// ─────────────────────────────────────────────
-// Global Error Handler
-// ─────────────────────────────────────────────
-app.use((err, req, res, next) => {
-  console.error("🔥 Unhandled error:", err.message);
-  res.status(500).json({ error: "Something went wrong" });
-});
-
-// ─────────────────────────────────────────────
-// Start Server
-// ─────────────────────────────────────────────
+// -----------------------------
+// 4. SERVER CONFIG
+// -----------------------------
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`⚡ Server started in ${Date.now() - global.startTime}ms`);
-  console.log(`🚀 Running on port ${PORT}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`⚡ Server ready in ${Date.now() - global.startTime}ms on port ${PORT}`);
 });
+
+server.timeout = 8000;
+server.keepAliveTimeout = 30000;
