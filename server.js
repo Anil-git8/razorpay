@@ -122,9 +122,21 @@ app.post("/create-order", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("❌ Razorpay create-order error:", err.message);
-    res.status(500).json({ success: false, error: err.message || "Order creation failed" });
-  }
+
+  console.log("=================================");
+  console.log("FULL RAZORPAY ERROR:");
+  console.dir(err, { depth: null });
+  console.log("=================================");
+
+  res.status(500).json({
+    success: false,
+    error:
+      err?.error?.description ||
+      err?.message ||
+      JSON.stringify(err) ||
+      "Order creation failed",
+  });
+}
 });
 
 // ✅ Verify Payment
