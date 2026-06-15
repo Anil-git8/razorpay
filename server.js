@@ -192,7 +192,7 @@ app.post("/submit-to-sheet", async (req, res) => {
     console.log("📊 Forwarding to Google Sheet:", { fullName, paymentStatus });
 
     // ⚠️ Replace this with your deployed Google Apps Script Web App URL
-    const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzlCw3FIqcH6zobXmkUX6QCsRR-VBCqMj6qfhLr18LHcn7GJcS4HBFwBgeQYnvQQMfE/exec";
+    const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzWDzUkABuwmrNEnDUPqAaWURTcKLlk_5181oN9c-zy4PHczHbewtovnmKYT8z19WwN/exec";
 
     const payload = {
       fullName:      fullName      || "",
