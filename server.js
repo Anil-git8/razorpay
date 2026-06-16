@@ -179,6 +179,7 @@ app.post("/submit-to-sheet", async (req, res) => {
     const {
       fullName,
       whatsapp,
+      folkGuide,
       gender,
       area,
       amount,
@@ -197,6 +198,7 @@ app.post("/submit-to-sheet", async (req, res) => {
     const payload = {
       fullName:      fullName      || "",
       whatsapp:      whatsapp      || "",
+      folkGuide:     folkGuide     || "",
       gender:        gender        || "",
       area:          area          || "",
       amount:        amount        || 0,
