@@ -122,21 +122,20 @@ app.post("/create-order", async (req, res) => {
     });
 
   } catch (err) {
+    console.log("=================================");
+    console.log("FULL RAZORPAY ERROR:");
+    console.dir(err, { depth: null });
+    console.log("=================================");
 
-  console.log("=================================");
-  console.log("FULL RAZORPAY ERROR:");
-  console.dir(err, { depth: null });
-  console.log("=================================");
-
-  res.status(500).json({
-    success: false,
-    error:
-      err?.error?.description ||
-      err?.message ||
-      JSON.stringify(err) ||
-      "Order creation failed",
-  });
-}
+    res.status(500).json({
+      success: false,
+      error:
+        err?.error?.description ||
+        err?.message ||
+        JSON.stringify(err) ||
+        "Order creation failed",
+    });
+  }
 });
 
 // ✅ Verify Payment
@@ -174,8 +173,6 @@ app.post("/verify-payment", (req, res) => {
 });
 
 // ✅ Forward to Google Sheets (Sunday Love Feast)
-// Payload keys must match exactly what the Google Apps Script reads via data.<key>
-// Sheet column order: Timestamp | Full Name | WhatsApp | FOLK Guide | Gender | Area | Amount | Sponsorship Details | Payment ID | Order ID | Payment Status
 app.post("/submit-to-sheet", async (req, res) => {
   try {
     const {
@@ -192,11 +189,10 @@ app.post("/submit-to-sheet", async (req, res) => {
       timestamp,
     } = req.body;
 
-    console.log("📊 Forwarding to Google Sheet:", { fullName, paymentStatus });
+    console.log("📊 Forwarding to Google Sheet:", { fullName, paymentStatus, folkGuide });
 
     const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzWDzUkABuwmrNEnDUPqAaWURTcKLlk_5181oN9c-zy4PHczHbewtovnmKYT8z19WwN/exec";
 
-    // Keys align exactly with what doPost() reads in the Apps Script
     const payload = {
       timestamp:     timestamp     || new Date().toISOString(),
       fullName:      fullName      || "",
@@ -224,7 +220,7 @@ app.post("/submit-to-sheet", async (req, res) => {
     try {
       result = JSON.parse(text);
     } catch {
-      result = { raw: text };
+      result = { success: false, raw: text };
     }
 
     if (result.success) {
