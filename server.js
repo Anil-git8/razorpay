@@ -174,6 +174,8 @@ app.post("/verify-payment", (req, res) => {
 });
 
 // ✅ Forward to Google Sheets (Sunday Love Feast)
+// Payload keys must match exactly what the Google Apps Script reads via data.<key>
+// Sheet column order: Timestamp | Full Name | WhatsApp | FOLK Guide | Gender | Area | Amount | Sponsorship Details | Payment ID | Order ID | Payment Status
 app.post("/submit-to-sheet", async (req, res) => {
   try {
     const {
@@ -183,7 +185,7 @@ app.post("/submit-to-sheet", async (req, res) => {
       gender,
       area,
       amount,
-      booksSummary,
+      booksSummary,   // shown as "Sponsorship Details" column in sheet
       paymentId,
       orderId,
       paymentStatus,
@@ -192,10 +194,11 @@ app.post("/submit-to-sheet", async (req, res) => {
 
     console.log("📊 Forwarding to Google Sheet:", { fullName, paymentStatus });
 
-    // ⚠️ Replace this with your deployed Google Apps Script Web App URL
     const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzWDzUkABuwmrNEnDUPqAaWURTcKLlk_5181oN9c-zy4PHczHbewtovnmKYT8z19WwN/exec";
 
+    // Keys align exactly with what doPost() reads in the Apps Script
     const payload = {
+      timestamp:     timestamp     || new Date().toISOString(),
       fullName:      fullName      || "",
       whatsapp:      whatsapp      || "",
       folkGuide:     folkGuide     || "",
@@ -206,14 +209,12 @@ app.post("/submit-to-sheet", async (req, res) => {
       paymentId:     paymentId     || "",
       orderId:       orderId       || "",
       paymentStatus: paymentStatus || "Pending",
-      timestamp:     timestamp     || new Date().toISOString(),
     };
 
     const response = await fetch(GOOGLE_SHEET_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      // Google Apps Script redirects — follow them
       redirect: "follow",
     });
 
@@ -313,7 +314,7 @@ app.post("/create-subscription", async (req, res) => {
       period,
       invoiceId: invoice?.id || null,
       invoiceStatus: invoice?.status || null,
-      invoiceUrl: invoice?.short_url || null,  // shareable invoice link
+      invoiceUrl: invoice?.short_url || null,
     });
 
   } catch (err) {
