@@ -191,7 +191,7 @@ app.post("/submit-to-sheet", async (req, res) => {
       timestamp,
     } = req.body;
     console.log("📊 Forwarding to Google Sheet:", { fullName, paymentStatus, folkGuide, sevaName, sevaDate });
-    const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbyeCtBFQBxBpx2Wz5uoTqf5Q70K9rD4FCmbIJzrv397Yh9rCifn15Axkl57LsNqqUNR/exec";
+    const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbxoETfs6y2i8U_FMtuYFocxefEbYMOjmh-qwEGBNXAald-jM5NzFH_DsqasmzRQEdzk/exec";
     const payload = {
       timestamp:     timestamp     || new Date().toISOString(),
       fullName:      fullName      || "",
