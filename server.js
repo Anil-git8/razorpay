@@ -1,9 +1,11 @@
 global.startTime = Date.now();
 
+require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const Razorpay = require("razorpay");
 const crypto = require("crypto");
+const axios = require("axios");
 
 const app = express();
 
@@ -11,14 +13,74 @@ app.use(cors());
 app.use(express.json());
 
 // -----------------------------
+// Logger, API URL, and processed cache
+// -----------------------------
+const FOLK_API_URL = process.env.FOLK_API_URL || "https://api.anandatirumaladevasthanam.com/api/donate";
+const SEVA_NAME = process.env.SEVA_NAME || "TRIDAS-FOLK-GENERAL";
+
+const log = {
+  info: (tag, msg, data = {}) => console.log(`[${new Date().toISOString()}] [INFO]  [${tag}] ${msg}`, JSON.stringify(data)),
+  warn: (tag, msg, data = {}) => console.warn(`[${new Date().toISOString()}] [WARN]  [${tag}] ${msg}`, JSON.stringify(data)),
+  error: (tag, msg, data = {}) => console.error(`[${new Date().toISOString()}] [ERROR] [${tag}] ${msg}`, JSON.stringify(data)),
+};
+
+const processedPayments = new Set();
+
+// -----------------------------
 // Razorpay Config
 // -----------------------------
 const razorpay = new Razorpay({
-  key_id: 'rzp_live_RW6EGUwOH81Aul',
-  key_secret: 'VuI5bdfHGZEN0Cf1v3R0A1q3',
+  key_id: process.env.RAZORPAY_KEY_ID || 'rzp_live_RW6EGUwOH81Aul',
+  key_secret: process.env.RAZORPAY_KEY_SECRET || 'VuI5bdfHGZEN0Cf1v3R0A1q3',
 });
 
-const KEY_SECRET = 'VuI5bdfHGZEN0Cf1v3R0A1q3';
+const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET || 'VuI5bdfHGZEN0Cf1v3R0A1q3';
+
+// -----------------------------
+// HELPER — Push to FOLK DB (Dhanunjaya)
+// -----------------------------
+async function pushToFOLK(donorName, amount, email, mobile, remarks, address = "") {
+  const payload = {
+    donor_name: donorName || "",
+    pan_no: "N/A",
+    mobile: mobile || "",
+    email: email || "",
+    address: address || "",
+    amount: parseFloat(amount) || 0,
+    seva: SEVA_NAME,
+    remarks: remarks || "",
+    atg_required: false,
+    trust: "TRI",
+    preacher: "PDKD",
+    separated_address: {
+      type: "Residential",
+      address_line_1: "N/A",
+      address_line_2: "N/A",
+      city: "N/A",
+      state: "N/A",
+      country: "India",
+      pin_code: "N/A",
+    },
+  };
+
+  log.info("FOLK", "Pushing to FOLK API", { remarks, donorName, amount });
+
+  try {
+    const response = await axios.post(FOLK_API_URL, payload, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 15000,
+    });
+    log.info("FOLK", "✅ Success", { status: response.status, data: response.data });
+    return { success: true, data: response.data };
+  } catch (err) {
+    log.error("FOLK", "❌ Failed", {
+      remarks,
+      status: err.response?.status,
+      error: err.response?.data || err.message,
+    });
+    return { success: false, error: err.response?.data || err.message };
+  }
+}
 
 // -----------------------------
 // HELPER — Create Razorpay Invoice
@@ -123,20 +185,20 @@ app.post("/create-order", async (req, res) => {
 
   } catch (err) {
 
-  console.log("=================================");
-  console.log("FULL RAZORPAY ERROR:");
-  console.dir(err, { depth: null });
-  console.log("=================================");
+    console.log("=================================");
+    console.log("FULL RAZORPAY ERROR:");
+    console.dir(err, { depth: null });
+    console.log("=================================");
 
-  res.status(500).json({
-    success: false,
-    error:
-      err?.error?.description ||
-      err?.message ||
-      JSON.stringify(err) ||
-      "Order creation failed",
-  });
-}
+    res.status(500).json({
+      success: false,
+      error:
+        err?.error?.description ||
+        err?.message ||
+        JSON.stringify(err) ||
+        "Order creation failed",
+    });
+  }
 });
 
 // ✅ Verify Payment
@@ -172,6 +234,70 @@ app.post("/verify-payment", (req, res) => {
     res.status(500).json({ success: false, error: "Verification failed" });
   }
 });
+
+// ✅ Webhook Handler
+app.post("/webhook", async (req, res) => {
+  try {
+    const signature = req.headers["x-razorpay-signature"];
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET || '2d4g4g7pp@fnwdA';
+
+    if (webhookSecret && signature) {
+      const shasum = crypto.createHmac("sha256", webhookSecret);
+      shasum.update(JSON.stringify(req.body));
+      const digest = shasum.digest("hex");
+      if (digest !== signature) {
+        log.warn("WEBHOOK", "❌ Invalid Webhook Signature");
+        return res.status(400).send("Invalid signature");
+      }
+    } else {
+      log.warn("WEBHOOK", "⚠️ Webhook received without signature verification (Secret/Signature missing)");
+    }
+
+    const { event, payload } = req.body;
+    log.info("WEBHOOK", `Event received: ${event}`, { event });
+
+    if (event === "payment.captured") {
+      const payment = payload?.payment?.entity;
+      if (!payment) {
+        log.error("WEBHOOK", "❌ No payment entity found in webhook payload");
+        return res.status(400).json({ success: false, error: "Invalid payload" });
+      }
+
+      const paymentId = payment.id;
+
+      // Idempotency: Ensure this payment is only processed once
+      if (processedPayments.has(paymentId)) {
+        log.warn("WEBHOOK", `⚠️ Payment ${paymentId} already processed, skipping`);
+        return res.json({ success: true, status: "already_processed" });
+      }
+
+      processedPayments.add(paymentId);
+
+      const donorName = payment.notes?.name || payment.notes?.donor_name || payment.notes?.firstname || payment.description || "Donor";
+      const amount = payment.amount / 100; // Razorpay uses paise
+      const email = payment.email || "";
+      const mobile = payment.contact || "";
+      const remarks = paymentId;
+      const address = payment.notes?.address || payment.notes?.areaOfStay || "";
+
+      log.info("WEBHOOK", `Processing successful payment: ${paymentId}`, {
+        donorName,
+        amount,
+        email,
+        mobile,
+      });
+
+      const pushResult = await pushToFOLK(donorName, amount, email, mobile, remarks, address);
+      return res.json({ success: true, pushResult });
+    }
+
+    res.json({ success: true, message: "Event ignored" });
+  } catch (err) {
+    log.error("WEBHOOK", "❌ Webhook handling exception", { error: err.message });
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 
 // ✅ Create Subscription (Monthly Auto-Debit) + Invoice
 app.post("/create-subscription", async (req, res) => {
