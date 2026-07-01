@@ -299,6 +299,66 @@ app.post("/webhook", async (req, res) => {
 });
 
 
+// ✅ Forward to Google Sheets (Sunday Love Feast)
+app.post("/submit-to-sheet", async (req, res) => {
+  try {
+    const {
+      fullName,
+      whatsapp,
+      folkGuide,
+      gender,
+      area,
+      amount,
+      booksSummary,   // legacy description
+      sevaName,       // split seva category name
+      sevaDate,       // split sponsorship date
+      paymentId,
+      orderId,
+      paymentStatus,
+      timestamp,
+    } = req.body;
+    console.log("📊 Forwarding to Google Sheet:", { fullName, paymentStatus, folkGuide, sevaName, sevaDate });
+    const GOOGLE_SHEET_URL = "https://script.google.com/macros/s/AKfycbzOIicR12W4l9iblHaWsSymCosS20lzbOaFaBqBFxq-qeuqkhGKhtzZ6vKqRezQNPtD/exec";
+    const payload = {
+      timestamp: timestamp || new Date().toISOString(),
+      fullName: fullName || "",
+      whatsapp: whatsapp || "",
+      folkGuide: folkGuide || "",
+      gender: gender || "",
+      area: area || "",
+      amount: amount || 0,
+      booksSummary: booksSummary || "",
+      sevaName: sevaName || "",
+      sevaDate: sevaDate || "",
+      paymentId: paymentId || "",
+      orderId: orderId || "",
+      paymentStatus: paymentStatus || "Pending",
+    };
+    const response = await fetch(GOOGLE_SHEET_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      redirect: "follow",
+    });
+    const text = await response.text();
+    let result;
+    try {
+      result = JSON.parse(text);
+    } catch {
+      result = { success: false, raw: text };
+    }
+    if (result.success) {
+      console.log("✅ Google Sheet updated for:", fullName);
+      res.json({ success: true, message: "Sheet updated" });
+    } else {
+      console.warn("⚠️ Google Sheet responded with error:", result);
+      res.status(500).json({ success: false, error: result.error || "Sheet update failed" });
+    }
+  } catch (err) {
+    console.error("❌ Google Sheet forward error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 // ✅ Create Subscription (Monthly Auto-Debit) + Invoice
 app.post("/create-subscription", async (req, res) => {
   const start = Date.now();
@@ -372,7 +432,7 @@ app.post("/create-subscription", async (req, res) => {
       period,
       invoiceId: invoice?.id || null,
       invoiceStatus: invoice?.status || null,
-      invoiceUrl: invoice?.short_url || null,  // shareable invoice link
+      invoiceUrl: invoice?.short_url || null,
     });
 
   } catch (err) {
